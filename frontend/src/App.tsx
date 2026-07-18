@@ -5,6 +5,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { LoginPage } from './pages/LoginPage'
 import { AgentsPage } from './pages/AgentsPage'
 import { NewAgentPage } from './pages/NewAgentPage'
+import { AgentDetailPage } from './pages/AgentDetailPage'
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
             <Route element={<Layout />}>
               <Route index element={<AgentsPage />} />
               <Route path="agents/new" element={<NewAgentPage />} />
+              <Route path="agents/:id" element={<AgentDetailPage />} />
             </Route>
           </Route>
         </Routes>

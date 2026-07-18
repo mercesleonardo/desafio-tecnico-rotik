@@ -30,3 +30,12 @@ export async function fetchExecutions(
 
   return data
 }
+
+export async function registerExecution(agentId: number): Promise<Execution> {
+  const { data } = await api.post<{ data: Execution }>(`/agents/${agentId}/executions`, {
+    duration_ms: Math.floor(Math.random() * 4000) + 300,
+    metadata: { channel: 'painel', simulated: true },
+  })
+
+  return data.data
+}
