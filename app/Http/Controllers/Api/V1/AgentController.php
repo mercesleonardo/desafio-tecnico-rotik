@@ -13,6 +13,9 @@ use Illuminate\Support\Facades\Gate;
 
 class AgentController extends Controller
 {
+    /**
+     * Lista os agentes do cliente autenticado com o consumo do mês.
+     */
     public function index(Request $request): AnonymousResourceCollection
     {
         $client = $request->user()->client->loadMissing('plan');
@@ -27,6 +30,9 @@ class AgentController extends Controller
         ]);
     }
 
+    /**
+     * Cadastra um novo agente para o cliente autenticado.
+     */
     public function store(StoreAgentRequest $request, CreateAgentAction $action): JsonResponse
     {
         Gate::authorize('create', Agent::class);
@@ -38,6 +44,9 @@ class AgentController extends Controller
             ->setStatusCode(Response::HTTP_CREATED);
     }
 
+    /**
+     * Exibe um agente do cliente autenticado.
+     */
     public function show(Request $request, Agent $agent): AgentResource
     {
         Gate::authorize('view', $agent);

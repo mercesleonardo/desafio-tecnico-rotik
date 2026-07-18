@@ -12,6 +12,9 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    /**
+     * Autentica um usuário e emite um token de acesso.
+     */
     public function login(LoginRequest $request): JsonResponse
     {
         $user = User::where('email', $request->validated('email'))->first();
@@ -28,6 +31,9 @@ class AuthController extends Controller
         ], Response::HTTP_OK);
     }
 
+    /**
+     * Revoga o token de acesso atual.
+     */
     public function logout(Request $request): Response
     {
         $request->user()->currentAccessToken()->delete();

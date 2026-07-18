@@ -15,6 +15,9 @@ use Illuminate\Support\Facades\Gate;
 
 class ExecutionController extends Controller
 {
+    /**
+     * Lista o histórico de execuções do agente, paginado (filtro opcional ?status=).
+     */
     public function index(Request $request, Agent $agent): AnonymousResourceCollection
     {
         Gate::authorize('view', $agent);
@@ -30,6 +33,9 @@ class ExecutionController extends Controller
         return ExecutionResource::collection($executions);
     }
 
+    /**
+     * Registra uma execução do agente, aplicando o limite mensal do plano (429 quando excedido).
+     */
     public function store(StoreExecutionRequest $request, Agent $agent, RegisterExecutionAction $action): JsonResponse
     {
         Gate::authorize('registerExecution', $agent);
