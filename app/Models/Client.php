@@ -33,4 +33,14 @@ class Client extends Model
     {
         return $this->hasManyThrough(Execution::class, Agent::class);
     }
+
+    public function executionsThisMonth(): int
+    {
+        return $this->executions()->countedInCurrentMonth()->count();
+    }
+
+    public function hasReachedExecutionLimit(): bool
+    {
+        return $this->executionsThisMonth() >= $this->plan->monthly_execution_limit;
+    }
 }
