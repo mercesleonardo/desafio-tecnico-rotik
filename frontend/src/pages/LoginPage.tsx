@@ -22,9 +22,11 @@ export function LoginPage() {
     } catch (err) {
       setError(
         isAxiosError(err) && err.response?.status === 422
-          ? 'E-mail ou senha inválidos.'
-          : 'Não foi possível conectar. Tente novamente.',
-      )
+            ? 'E-mail ou senha inválidos.'
+            : isAxiosError(err) && err.response?.status === 429
+            ? 'Muitas tentativas de login. Aguarde um minuto e tente de novo.'
+            : 'Não foi possível conectar. Tente novamente.',
+        )
     } finally {
       setIsSubmitting(false)
     }
