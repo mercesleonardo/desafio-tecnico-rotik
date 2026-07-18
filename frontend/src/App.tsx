@@ -4,6 +4,7 @@ import { Layout } from './components/Layout'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { LoginPage } from './pages/LoginPage'
 import { AgentsPage } from './pages/AgentsPage'
+import { NewAgentPage } from './pages/NewAgentPage'
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
               <Route index element={<AgentsPage />} />
+              <Route path="agents/new" element={<NewAgentPage />} />
             </Route>
           </Route>
         </Routes>
