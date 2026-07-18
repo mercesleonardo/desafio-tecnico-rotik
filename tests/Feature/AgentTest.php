@@ -78,3 +78,7 @@ it('não permite ver agente de outro cliente', function () {
 it('exige autenticação nos endpoints de agentes', function () {
     $this->getJson(route('api.v1.agents.index'))->assertUnauthorized();
 });
+
+it('retorna 401 em JSON mesmo sem o header Accept', function () {
+    $this->get(route('api.v1.agents.index'))->assertUnauthorized();
+});
