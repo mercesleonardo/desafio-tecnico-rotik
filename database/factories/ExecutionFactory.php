@@ -2,7 +2,7 @@
 
 namespace Database\Factories;
 
-use App\Enums\Enums\ExecutionStatus;
+use App\Enums\ExecutionStatus;
 use App\Models\{Agent, Execution};
 use Illuminate\Database\Eloquent\Factories\Factory;
 
