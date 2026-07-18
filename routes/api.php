@@ -13,5 +13,6 @@ Route::prefix('v1')->name('api.v1.')->group(function () {
         Route::post('auth/logout', [AuthController::class, 'logout'])->name('auth.logout');
         Route::apiResource('agents', AgentController::class)->only(['index', 'store', 'show']);
         Route::post('agents/{agent}/executions', [ExecutionController::class, 'store'])->name('agents.executions.store');
+        Route::get('agents/{agent}/executions', [ExecutionController::class, 'index'])->name('agents.executions.index');
     });
 });
