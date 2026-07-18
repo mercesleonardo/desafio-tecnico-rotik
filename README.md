@@ -113,3 +113,102 @@ de negócio.
   retry do cliente pode contar duas vezes. Aceitável no MVP; anotado.
 - **Rate limiting de infraestrutura** (proteção de abuso) ≠ limite de plano.
   Só o segundo é regra de negócio; o primeiro fica para produção real.
+
+---
+
+## Etapa 1 — Modelagem de dados
+
+```mermaid
+erDiagram
+    PLAN ||--o{ CLIENT : "1:N"
+    CLIENT ||--o{ USER : "1:N"
+    CLIENT ||--o{ AGENT : "1:N"
+    AGENT ||--o{ EXECUTION : "1:N"
+
+    PLAN {
+        bigint id PK
+        string name
+        int monthly_execution_limit
+        timestamps timestamps
+    }
+    CLIENT {
+        bigint id PK
+        string name
+        bigint plan_id FK
+        timestamps timestamps
+    }
+    USER {
+        bigint id PK
+        bigint client_id FK
+        string name
+        string email UK
+        string password
+        timestamps timestamps
+    }
+    AGENT {
+        bigint id PK
+        bigint client_id FK
+        string name
+        text description "nullable"
+        string status "active | inactive"
+        timestamps timestamps
+    }
+    EXECUTION {
+        bigint id PK
+        bigint agent_id FK
+        string status "success | failed | blocked"
+        int duration_ms "nullable"
+        jsonb metadata "nullable"
+        timestamps timestamps
+    }
+```
+
+### Decisões de modelagem
+
+**Normalização.** O `monthly_execution_limit` vive apenas em `plans` — única
+fonte de verdade. Nada de copiar o limite para `clients` ou `agents`: se o
+plano muda, o novo limite vale imediatamente (assumption 7 do Discovery).
+O trade-off consciente é não ter histórico de "qual era o limite no mês X";
+se billing retroativo virar requisito, a evolução é uma tabela
+`client_plan_history` — fora do MVP.
+
+**Bloqueio é estado derivado, não coluna.** Não existe `is_blocked` em
+`agents` ou `clients`. Um cliente está bloqueado quando
+`COUNT(execuções do mês corrente) >= limite do plano`. Isso elimina uma
+classe inteira de bugs: ninguém precisa "lembrar de desbloquear" na virada do
+mês, nem existe risco de coluna dessincronizada com a realidade. O custo é
+calcular o consumo a cada leitura/escrita — mitigado pelo índice abaixo.
+
+**Índices relevantes.**
+- `executions (agent_id, created_at)` — índice composto que atende os dois
+  acessos quentes: histórico paginado por agente (ordenado por data) e
+  contagem mensal (range scan por período). É o índice mais importante do
+  sistema.
+- FKs indexadas: `clients.plan_id`, `users.client_id`, `agents.client_id`.
+- `users.email` unique (login).
+
+**"Uso mensal" performático: contagem em tempo real vs. agregação.**
+- **MVP (implementado): contagem em tempo real.** O consumo do cliente é um
+  `COUNT` sobre `executions` juntando os agentes do cliente, filtrado pelo mês
+  corrente, servido pelo índice composto. Para o volume de um MVP (milhares a
+  centenas de milhares de execuções/mês por cliente), isso responde em
+  milissegundos, é sempre exato e não tem estado para dessincronizar.
+- **Evolução (documentada, não implementada): contador agregado.** Em escala
+  (milhões de execuções/mês), a contagem no caminho crítico da escrita vira
+  gargalo. O desenho: tabela `monthly_usages (client_id, period, count)` com
+  `UNIQUE (client_id, period)` e incremento atômico
+  (`UPDATE ... SET count = count + 1`) na mesma transação do INSERT da
+  execução. A leitura vira O(1). O contrato da API não muda — só a
+  implementação interna do cálculo de consumo.
+
+**Concorrência (regra central).** Duas execuções simultâneas quando resta 1
+unidade do limite podem ambas ler "ainda cabe" e ambas gravar — estourando o
+limite. A verificação e o INSERT acontecem dentro de uma transação com lock
+(`SELECT ... FOR UPDATE` na linha do cliente), serializando execuções
+concorrentes do mesmo cliente. Detalhes na Etapa 2.
+
+**Enums como string + PHP Enum.** `status` é `string` no banco, validada por
+Enums do PHP (`AgentStatus`, `ExecutionStatus`) na aplicação. Evito o tipo
+`ENUM` nativo do Postgres porque alterar valores dele exige DDL chato em
+produção; a validação na borda da aplicação (FormRequest + cast do Eloquent)
+dá a mesma garantia com flexibilidade.
