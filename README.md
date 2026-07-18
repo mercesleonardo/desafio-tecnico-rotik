@@ -1,58 +1,115 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Rotik — Painel de Monitoramento de Agentes de IA
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Desafio técnico Fullstack (Laravel + React). Este README documenta o Discovery,
+as decisões de arquitetura, as instruções de execução e as respostas de produto.
 
-## About Laravel
+> **Stack:** Laravel 13 (API REST) + React/TypeScript (SPA) + PostgreSQL.
+> A Rotik usa Laravel, Node/TS e PostgreSQL — escolhi essa combinação para
+> demonstrar afinidade com a stack real do time.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Etapa 0 — Discovery
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+O briefing é intencionalmente incompleto. Abaixo, as perguntas que eu faria ao
+stakeholder e a suposição que adotei para cada uma na ausência de resposta.
 
-## Learning Laravel
+### Perguntas ao stakeholder & assumptions
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+**1. Quem usa o painel: o time de CS interno (vendo todos os clientes) ou cada
+cliente vendo os próprios dados?**
+O briefing diz "fácil de usar pelo nosso time de CS", mas também exige que "um
+cliente não pode ver dados de outro" — o que implica usuários de clientes.
+➜ **Assumption:** modelei o sistema *client-scoped*: cada usuário pertence a um
+cliente e só enxerga os dados dele (Policy garante o isolamento). A visão
+multi-cliente para CS é uma evolução natural (role `admin` com bypass na
+Policy + seletor de cliente no painel) e está documentada como fora do MVP.
+Essa ordem faz sentido porque o isolamento é o requisito de segurança
+inegociável; a visão agregada é aditiva.
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+**2. O limite mensal é por cliente (soma de todos os agentes) ou por agente?**
+➜ **Assumption:** por **cliente**. O briefing diz "quando *um cliente* está
+perto de estourar o limite de execuções *do plano contratado*" — o plano é do
+cliente, então o consumo que importa é o agregado de todos os agentes dele.
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+**3. "Mês" é mês-calendário ou ciclo de contrato (aniversário da assinatura)?**
+➜ **Assumption:** mês-calendário (reseta todo dia 1º, UTC). É mais simples de
+implementar, de explicar para o CS e de consultar no banco. Ciclo por
+aniversário exigiria armazenar a data-base do contrato — anotado como risco.
 
-## Agentic Development
+**4. Ao estourar o limite: bloquear de fato ou apenas sinalizar?**
+O briefing hesita ("deveria parar de responder, *ou pelo menos* a gente
+precisa saber").
+➜ **Assumption:** fiz os dois — a API **rejeita** novas execuções com HTTP 429
+**e registra a tentativa** com status `blocked`, além de disparar um evento
+logado. Assim o CS tem visibilidade do quanto o cliente está "batendo no teto"
+(dado valioso para upsell), e o comportamento é reversível por configuração se
+o produto decidir só sinalizar.
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+**5. O que significa "perto de estourar"? Qual o threshold do alerta?**
+➜ **Assumption:** alerta visual no painel a partir de **80%** do limite
+(amarelo) e estado bloqueado a 100% (vermelho). 80% é convenção comum de
+quota; o valor é trivial de ajustar.
 
-```bash
-composer require laravel/boost --dev
+**6. Quem registra as execuções e o que uma execução carrega?**
+➜ **Assumption:** a execução é registrada via API pelo runtime dos agentes
+(simulado aqui pelo painel/seeders). Payload mínimo: status
+(`success`/`failed`), duração em ms e metadados livres (JSON). Tokens, custo e
+transcript ficam fora do MVP.
 
-php artisan boost:install
-```
+**7. Mudança de plano no meio do mês: como fica o limite?**
+➜ **Assumption:** o limite avaliado é sempre o do plano **atual** do cliente no
+momento da execução, sem pro-rata. Upgrade desbloqueia imediatamente (o novo
+limite é maior); downgrade pode bloquear imediatamente. Simples e previsível.
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+**8. Alertas devem chegar por algum canal (e-mail, Slack)?**
+➜ **Assumption:** no MVP o alerta é visual no painel + log estruturado no
+backend. A arquitetura usa Event/Listener no bloqueio, então plugar uma
+Notification (e-mail/Slack) depois é adicionar um listener, sem tocar na regra
+de negócio.
 
-## Contributing
+### Entidades identificadas
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+- **Plan** — plano comercial; carrega o `monthly_execution_limit`.
+- **Client** — empresa cliente da Rotik; pertence a um Plan.
+- **User** — pessoa que autentica no painel; pertence a um Client.
+- **Agent** — agente de IA configurado por um Client; tem status (ativo/inativo).
+- **Execution** — uma chamada de um Agent; tem status (`success`/`failed`/`blocked`).
+- **Consumo mensal / Bloqueio** — conceitos **derivados**, não armazenados:
+  consumo = execuções do cliente no mês corrente; bloqueado = consumo ≥ limite.
+  (Justificativa na Etapa 1.)
 
-## Code of Conduct
+### Escopo do MVP
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+**Dentro:**
+- Auth por token (Sanctum) + isolamento por cliente (Policy).
+- CRUD de agentes (criar, listar com consumo, detalhar).
+- Registro de execução com a regra de bloqueio por limite (regra central).
+- Histórico de execuções paginado.
+- Painel React: lista com % de consumo, cadastro, histórico, indicação visual
+  de alerta (≥80%) e bloqueio (100%).
 
-## Security Vulnerabilities
+**Fora (e por quê):**
+- Visão CS multi-cliente — evolução aditiva; o requisito de segurança
+  (isolamento) vem primeiro. (pergunta 1)
+- Notificações externas (e-mail/Slack) — o Event já existe; é só plugar
+  listener. (pergunta 8)
+- Billing, pro-rata, troca de plano self-service — o plano é dado seedado;
+  gestão comercial não é o problema do briefing.
+- Edição/exclusão de agentes — o briefing pede "cadastrar" e "ver"; deleção
+  envolve decisões (o que fazer com o histórico?) que não bloqueiam o valor.
+- Tokens/custo por execução — métrica útil, mas o limite do briefing é em
+  execuções.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### Riscos e ambiguidades deixados de fora (conscientemente)
 
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+- **Fuso horário da virada do mês** — assumo UTC. Se clientes cobrarem "meu mês
+  virou mais cedo/tarde", trocar por timezone do cliente é mudança localizada
+  na query de consumo.
+- **Crescimento da tabela de execuções** — contagem em tempo real com índice
+  atende o MVP; a evolução (contador mensal agregado) está desenhada na
+  Etapa 1 e não muda o contrato da API.
+- **Idempotência do registro de execução** — sem chave de idempotência, um
+  retry do cliente pode contar duas vezes. Aceitável no MVP; anotado.
+- **Rate limiting de infraestrutura** (proteção de abuso) ≠ limite de plano.
+  Só o segundo é regra de negócio; o primeiro fica para produção real.
