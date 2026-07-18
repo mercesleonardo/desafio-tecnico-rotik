@@ -3,6 +3,7 @@ import { AuthProvider } from './auth/AuthContext'
 import { Layout } from './components/Layout'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { LoginPage } from './pages/LoginPage'
+import { AgentsPage } from './pages/AgentsPage'
 
 function App() {
   return (
@@ -12,7 +13,7 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
-              <Route index element={<p>Lista de agentes — próximo commit</p>} />
+              <Route index element={<AgentsPage />} />
             </Route>
           </Route>
         </Routes>
