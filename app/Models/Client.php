@@ -2,13 +2,18 @@
 
 namespace App\Models;
 
+use Database\Factories\ClientFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\{BelongsTo, HasMany, HasManyThrough};
 
 #[Fillable(['name', 'plan_id'])]
 class Client extends Model
 {
+    /** @use HasFactory<ClientFactory> */
+    use HasFactory;
+    // ...
     public function plan(): BelongsTo
     {
         return $this->belongsTo(Plan::class);
