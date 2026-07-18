@@ -42,5 +42,10 @@ class DatabaseSeeder extends Seeder
         $inactive = Agent::factory()->for($initech)->inactive()->create(['name' => 'Bot Desativado']);
         Execution::factory(100)->for($faq)->create();
         Execution::factory(7)->for($faq)->blocked()->create();
+
+        // Umbrella (Pro) — sem agentes ainda (demonstra o estado vazio do painel)
+        $umbrella = Client::factory()->for($pro)->create(['name' => 'Umbrella']);
+        User::factory()->for($umbrella)->create(['name' => 'Dani', 'email' => 'dani@umbrella.test']);
+
     }
 }
