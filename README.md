@@ -7,6 +7,14 @@ as decisões de arquitetura, as instruções de execução e as respostas de pro
 > A Rotik usa Laravel, Node/TS e PostgreSQL — escolhi essa combinação para
 > demonstrar afinidade com a stack real do time.
 
+> **🔗 Deploy:** [Painel (Vercel)](https://desafio-tecnico-rotik.vercel.app) ·
+> [API (Railway)](https://desafio-tecnico-rotik-production.up.railway.app) ·
+> [Documentação OpenAPI](https://desafio-tecnico-rotik-production.up.railway.app/docs/api)
+>
+> **Logins demo** (senha `password` para todos): `ana@acme.test` (saudável) ·
+> `bruno@globex.test` (85% do limite) · `carla@initech.test` (bloqueado) ·
+> `dani@umbrella.test` (sem agentes)
+
 ---
 
 ## Etapa 0 — Discovery
@@ -212,3 +220,135 @@ Enums do PHP (`AgentStatus`, `ExecutionStatus`) na aplicação. Evito o tipo
 `ENUM` nativo do Postgres porque alterar valores dele exige DDL chato em
 produção; a validação na borda da aplicação (FormRequest + cast do Eloquent)
 dá a mesma garantia com flexibilidade.
+
+---
+
+## Decisões de arquitetura
+
+**Backend (Laravel 13 + Sanctum + Postgres)**
+- **API versionada** (`/api/v1`) com **Form Requests** (validação), **API Resources**
+  (serialização), **Policies** (autorização client-scoped), **Actions**
+  (`RegisterExecutionAction` isola a regra central e é testável sem HTTP),
+  **Enums** PHP espelhando os status, **Event/Listener** no bloqueio
+  (`ExecutionLimitReached` → log estruturado; plugar e-mail/Slack = adicionar listener).
+- **Auth:** Sanctum com Bearer token. Session cookies exigiriam domínios casados
+  (front na Vercel, API no Railway); JWT adicionaria dependência sem ganho.
+- **Bloqueio (regra central):** transação com `lockForUpdate()` na linha do
+  **cliente** — serializa o check-do-limite + INSERT de execuções concorrentes do
+  mesmo cliente, sem travar clientes distintos entre si. Tentativa rejeitada é
+  **registrada** com status `blocked` (demanda reprimida = dado de upsell) e a
+  resposta é **429** com corpo no mesmo shape dos erros de validação.
+- **Erros consistentes:** `{message, errors}` em toda a API; `shouldRenderJsonWhen`
+  garante JSON para `api/*` mesmo sem header `Accept`; `APP_DEBUG=false` em produção.
+
+**Frontend (React 19 + Vite + TypeScript + Tailwind v4)**
+- **Estado:** sessão em Context (único estado global real); dados de servidor no
+  cache do **TanStack Query** (retry, invalidação, `keepPreviousData` na paginação);
+  formulários com `useState` local. Sem Redux — não há demanda que o justifique.
+- **Performance:** `React.memo` nos cards, `staleTime` 30s (evita refetch em
+  cascata), paginação server-side, `keepPreviousData` (sem flash de skeleton).
+- **A11y:** labels vinculados, `role="alert"`, `aria-invalid`/`aria-describedby`
+  nos erros de campo, `role="progressbar"` na barra de consumo, navegação por teclado.
+- **Estados de UI:** skeleton, vazio, erro com retry — todos visitáveis com os
+  logins demo.
+
+## Como rodar localmente
+
+Pré-requisitos: Docker (para o Sail) e Node 22+.
+
+```bash
+# Backend
+cp .env.example .env            # já aponta para o Postgres do Sail
+docker run --rm -v "$(pwd)":/var/www/html -w /var/www/html \
+  laravelsail/php84-composer:latest composer install
+./vendor/bin/sail up -d
+./vendor/bin/sail artisan key:generate
+./vendor/bin/sail artisan migrate --seed
+# API em http://localhost — doc em http://localhost/docs/api
+
+# Frontend (outro terminal)
+cd frontend
+npm install
+cp .env.example .env            # VITE_API_URL=http://localhost/api/v1
+npm run dev
+# Painel em http://localhost:5173
+
+# Testes e lint
+./vendor/bin/sail artisan test --compact
+./vendor/bin/sail bin pint --dirty
+cd frontend && npm run lint && npm run build
+```
+
+## Evidências de debug (Etapa 5)
+
+**1. O rollback que engolia a tentativa bloqueada.** Na primeira versão da
+`RegisterExecutionAction`, a exception de limite era lançada **dentro** do
+`DB::transaction()`. Sintoma: a API respondia 429 corretamente, mas o teste
+`registra a tentativa bloqueada` falhava no `assertDatabaseHas` — o registro
+`blocked` sumia. Causa: o throw dentro do closure faz o Laravel dar rollback em
+tudo, inclusive no INSERT da tentativa. Correção: o closure apenas *retorna* o
+resultado; commit acontece; evento e exception disparam **depois**. O teste de
+regressão cobre exatamente esse cenário.
+
+**2. `Route [login] not defined` (500) só no navegador.** Acessando uma rota
+protegida sem token pelo navegador, o middleware `Authenticate` tentava
+redirecionar para uma página de login que não existe numa API pura. Os testes
+não pegavam porque `getJson()` envia `Accept: application/json`. Correção:
+`redirectGuestsTo(null)` para `api/*` + teste de regressão usando `get()` sem
+header, simulando o navegador.
+
+**3. Mixed content atrás do proxy (deploy).** Em produção, a doc OpenAPI e os
+links de paginação saíam com `http://` — o TLS termina no proxy do Railway e o
+Laravel via a requisição como HTTP, e o navegador bloqueava as chamadas
+(mixed content). Diagnóstico via headers da requisição no DevTools; correção:
+`trustProxies(at: '*')` + `APP_URL` com esquema correto.
+
+## Monitoramento em produção (descritivo)
+
+- **Saúde:** uptime do `/up` (health check), taxa de 5xx, latência p50/p95 por
+  endpoint — em especial `POST /executions`, que carrega a transação com lock.
+- **Negócio:** eventos de bloqueio por cliente/dia (pico = oportunidade comercial
+  ou plano mal dimensionado); % de clientes acima de 80% do limite; execuções/min.
+- **Banco:** conexões ativas, tempo de espera em locks (contenção do
+  `lockForUpdate` indica hora de migrar para o contador agregado da Etapa 1),
+  crescimento da tabela `executions`.
+- **Ferramentas:** Sentry para exceptions, APM (New Relic/Datadog) ou
+  Prometheus+Grafana para métricas, logs estruturados (já emitidos em stderr)
+  agregados. Alertas: pico de 429 de limite, 5xx > 1%, latência p95 > 500ms.
+
+## Mentalidade de produto (Etapa 7)
+
+**1. Gera valor real? Para quem?** Sim, para três públicos: **CS** diagnostica
+"por que o agente parou" em segundos (era o atrito central do briefing);
+**Comercial** ganha a lista de contas em risco e a *demanda reprimida* (tentativas
+bloqueadas) como gatilho de upsell; **Produto** enxerga uso real por cliente. O
+cliente final ganha indiretamente: bloqueio previsível e comunicado em vez de
+falha silenciosa.
+
+**2. Solução mais simples?** Sim: um job diário que agrega execuções por cliente
+e publica num canal do Slack (ou planilha) a lista de clientes ≥80% do limite,
+mais o enforcement do limite na API. Sem painel, sem frontend — resolveria
+"saber quem está em risco" e "parar de responder" com ~1 dia de trabalho. O
+painel se justifica quando o CS precisa de autoatendimento e histórico.
+
+**3. Vale investir agora?** O **enforcement + alerta** vale imediatamente: sem
+ele a Rotik paga custo de inferência acima do contratado (margem vazando) e
+descobre estouros pelo suporte. O **painel completo** é segunda prioridade —
+compete com confiabilidade dos próprios agentes. Investiria: enforcement já
+(feito), painel em versão mínima (feito), e evoluções (notificações, visão CS
+multi-cliente) puxadas por demanda do time.
+
+**4. Como medir sucesso?**
+- **Tempo de diagnóstico do CS**: tempo médio para responder tickets de
+  "agente parou/uso" antes vs. depois (meta: cair >50%).
+- **Estouros sem aviso**: % de clientes que atingem 100% sem contato prévio do
+  comercial (meta: tender a zero — o alerta de 80% deve gerar ação antes).
+- **Adoção**: usuários ativos semanais do painel dentro do time de CS/Comercial
+  (se ninguém abre, a planilha era suficiente).
+
+## Simplificações conscientes
+
+- `php artisan serve` no Railway (produção real: FrankenPHP/Octane ou nginx+fpm).
+- Token em `localStorage` (produção real: cookie httpOnly via modo SPA do Sanctum).
+- CORS liberado para `*` e doc OpenAPI pública (vitrine do desafio).
+- Sem chave de idempotência no registro de execuções (retry pode duplicar).
