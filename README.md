@@ -1,126 +1,124 @@
-# Rotik — Painel de Monitoramento de Agentes de IA
+# Desafio Técnico Rotik — Painel de Monitoramento de Agentes de IA
 
-Desafio técnico Fullstack (Laravel + React). Este README documenta o Discovery,
-as decisões de arquitetura, as instruções de execução e as respostas de produto.
+Painel para acompanhar o uso dos agentes de IA por cliente: consumo do mês contra o
+limite do plano, bloqueio de novas execuções quando o limite estoura e histórico por
+agente. Backend em Laravel 13 (API REST) e frontend em React com TypeScript.
 
-> **Stack:** Laravel 13 (API REST) + React/TypeScript (SPA) + PostgreSQL.
-> A Rotik usa Laravel, Node/TS e PostgreSQL — escolhi essa combinação para
-> demonstrar afinidade com a stack real do time.
+**Links:**
 
-> **🔗 Deploy:** [Painel (Vercel)](https://desafio-tecnico-rotik.vercel.app) ·
-> [API (Railway)](https://desafio-tecnico-rotik-production.up.railway.app) ·
-> [Documentação OpenAPI](https://desafio-tecnico-rotik-production.up.railway.app/docs/api)
->
-> **Logins demo** (senha `password` para todos): `ana@acme.test` (saudável) ·
-> `bruno@globex.test` (85% do limite) · `carla@initech.test` (bloqueado) ·
-> `dani@umbrella.test` (sem agentes)
+- Painel: https://desafio-tecnico-rotik.vercel.app
+- API: https://desafio-tecnico-rotik-production.up.railway.app
+- Documentação da API (OpenAPI): https://desafio-tecnico-rotik-production.up.railway.app/docs/api
+
+**Usuários para teste** (senha `password` para todos):
+
+| E-mail | Cenário |
+| --- | --- |
+| `ana@acme.test` | consumo tranquilo, com histórico do mês passado |
+| `bruno@globex.test` | 85% do limite, aparece o alerta |
+| `carla@initech.test` | limite estourado, agentes bloqueados |
+| `dani@umbrella.test` | cliente sem nenhum agente ainda |
+
+Sobre a stack: trabalho no dia a dia com Laravel, e como a Rotik usa Laravel,
+Node/TypeScript e PostgreSQL, mantive tudo dentro da stack de vocês. O frontend segue
+a recomendação do briefing (React).
 
 ---
 
 ## Etapa 0 — Discovery
 
-O briefing é intencionalmente incompleto. Abaixo, as perguntas que eu faria ao
-stakeholder e a suposição que adotei para cada uma na ausência de resposta.
+O briefing deixa bastante coisa em aberto de propósito. Antes de escrever código,
+listei as perguntas que eu faria ao time de produto e o que decidi assumir na falta
+de resposta.
 
-### Perguntas ao stakeholder & assumptions
+**1. O painel é para o time de CS ou para o próprio cliente usar?**
 
-**1. Quem usa o painel: o time de CS interno (vendo todos os clientes) ou cada
-cliente vendo os próprios dados?**
-O briefing diz "fácil de usar pelo nosso time de CS", mas também exige que "um
-cliente não pode ver dados de outro" — o que implica usuários de clientes.
-➜ **Assumption:** modelei o sistema *client-scoped*: cada usuário pertence a um
-cliente e só enxerga os dados dele (Policy garante o isolamento). A visão
-multi-cliente para CS é uma evolução natural (role `admin` com bypass na
-Policy + seletor de cliente no painel) e está documentada como fora do MVP.
-Essa ordem faz sentido porque o isolamento é o requisito de segurança
-inegociável; a visão agregada é aditiva.
+O texto fala em "fácil de usar pelo nosso time de CS", mas logo depois exige que "um
+cliente não pode ver dados de outro" o que só faz sentido se existirem usuários de
+clientes. Segui o modelo em que cada usuário pertence a um cliente e enxerga apenas os
+dados dele, com uma Policy garantindo o isolamento. Uma visão interna para o CS (um
+perfil admin que enxerga todos os clientes e escolhe qual ver) ficou como evolução:
+seria um bypass na Policy e um seletor na tela, sem mudar a modelagem. Preferi
+garantir primeiro o requisito de segurança, que é o inegociável dos dois.
 
-**2. O limite mensal é por cliente (soma de todos os agentes) ou por agente?**
-➜ **Assumption:** por **cliente**. O briefing diz "quando *um cliente* está
-perto de estourar o limite de execuções *do plano contratado*" — o plano é do
-cliente, então o consumo que importa é o agregado de todos os agentes dele.
+**2. O limite é por cliente ou por agente?**
 
-**3. "Mês" é mês-calendário ou ciclo de contrato (aniversário da assinatura)?**
-➜ **Assumption:** mês-calendário (reseta todo dia 1º, UTC). É mais simples de
-implementar, de explicar para o CS e de consultar no banco. Ciclo por
-aniversário exigiria armazenar a data-base do contrato — anotado como risco.
+Assumi por cliente. O briefing fala no "limite de execuções do plano contratado", e o
+plano é do cliente então o que conta é a soma das execuções de todos os agentes
+dele no mês.
 
-**4. Ao estourar o limite: bloquear de fato ou apenas sinalizar?**
-O briefing hesita ("deveria parar de responder, *ou pelo menos* a gente
-precisa saber").
-➜ **Assumption:** fiz os dois — a API **rejeita** novas execuções com HTTP 429
-**e registra a tentativa** com status `blocked`, além de disparar um evento
-logado. Assim o CS tem visibilidade do quanto o cliente está "batendo no teto"
-(dado valioso para upsell), e o comportamento é reversível por configuração se
-o produto decidir só sinalizar.
+**3. "Mês" é mês-calendário ou ciclo de contrato?**
 
-**5. O que significa "perto de estourar"? Qual o threshold do alerta?**
-➜ **Assumption:** alerta visual no painel a partir de **80%** do limite
-(amarelo) e estado bloqueado a 100% (vermelho). 80% é convenção comum de
-quota; o valor é trivial de ajustar.
+Fui de mês-calendário: vira todo dia 1º, em UTC. É mais simples de implementar, de
+explicar para o CS e de consultar no banco. Se um dia precisar ser pelo aniversário da
+assinatura, vai exigir guardar a data-base do contrato; deixei isso anotado nos riscos.
+
+**4. Estourou o limite: bloqueia de verdade ou só avisa?**
+
+O próprio briefing hesita ("deveria parar de responder, ou pelo menos a gente precisa
+saber que isso aconteceu"). Acabei fazendo os dois: a API rejeita a execução com HTTP
+429, registra a tentativa com status `blocked` e loga o evento. Registrar a tentativa
+foi uma escolha deliberada — assim dá para ver o quanto cada cliente está batendo no
+teto depois de bloqueado, o que é um bom argumento para o comercial oferecer upgrade.
+
+**5. O que significa "perto de estourar"?**
+
+Defini 80%: a barra de consumo fica amarela a partir daí e vermelha aos 100%. É um
+número chutado com base no que costumo ver em quotas de API, e é trivial de ajustar.
 
 **6. Quem registra as execuções e o que uma execução carrega?**
-➜ **Assumption:** a execução é registrada via API pelo runtime dos agentes
-(simulado aqui pelo painel/seeders). Payload mínimo: status
-(`success`/`failed`), duração em ms e metadados livres (JSON). Tokens, custo e
-transcript ficam fora do MVP.
 
-**7. Mudança de plano no meio do mês: como fica o limite?**
-➜ **Assumption:** o limite avaliado é sempre o do plano **atual** do cliente no
-momento da execução, sem pro-rata. Upgrade desbloqueia imediatamente (o novo
-limite é maior); downgrade pode bloquear imediatamente. Simples e previsível.
+Assumi que é o runtime dos agentes chamando a API (no desafio, simulei isso pelo
+painel e pelos seeders). O payload ficou no mínimo necessário: status
+(`success`/`failed`), duração em ms e um JSON livre de metadados. Tokens consumidos,
+custo e transcript da conversa ficaram de fora do MVP.
 
-**8. Alertas devem chegar por algum canal (e-mail, Slack)?**
-➜ **Assumption:** no MVP o alerta é visual no painel + log estruturado no
-backend. A arquitetura usa Event/Listener no bloqueio, então plugar uma
-Notification (e-mail/Slack) depois é adicionar um listener, sem tocar na regra
-de negócio.
+**7. E se o cliente trocar de plano no meio do mês?**
 
-### Entidades identificadas
+Vale sempre o plano atual no momento da execução, sem pro-rata. Upgrade desbloqueia na
+hora (o limite novo é maior), downgrade pode bloquear na hora. Simples e previsível.
 
-- **Plan** — plano comercial; carrega o `monthly_execution_limit`.
-- **Client** — empresa cliente da Rotik; pertence a um Plan.
-- **User** — pessoa que autentica no painel; pertence a um Client.
-- **Agent** — agente de IA configurado por um Client; tem status (ativo/inativo).
-- **Execution** — uma chamada de um Agent; tem status (`success`/`failed`/`blocked`).
-- **Consumo mensal / Bloqueio** — conceitos **derivados**, não armazenados:
-  consumo = execuções do cliente no mês corrente; bloqueado = consumo ≥ limite.
-  (Justificativa na Etapa 1.)
+**8. O alerta precisa chegar por algum canal (e-mail, Slack)?**
 
-### Escopo do MVP
+No MVP o alerta é visual no painel, mais um log estruturado no backend. Como o
+bloqueio dispara um evento (`ExecutionLimitReached`), mandar e-mail ou mensagem no
+Slack depois é só adicionar um listener, sem mexer na regra de negócio.
 
-**Dentro:**
-- Auth por token (Sanctum) + isolamento por cliente (Policy).
-- CRUD de agentes (criar, listar com consumo, detalhar).
-- Registro de execução com a regra de bloqueio por limite (regra central).
-- Histórico de execuções paginado.
-- Painel React: lista com % de consumo, cadastro, histórico, indicação visual
-  de alerta (≥80%) e bloqueio (100%).
+### Entidades que identifiquei
 
-**Fora (e por quê):**
-- Visão CS multi-cliente — evolução aditiva; o requisito de segurança
-  (isolamento) vem primeiro. (pergunta 1)
-- Notificações externas (e-mail/Slack) — o Event já existe; é só plugar
-  listener. (pergunta 8)
-- Billing, pro-rata, troca de plano self-service — o plano é dado seedado;
-  gestão comercial não é o problema do briefing.
-- Edição/exclusão de agentes — o briefing pede "cadastrar" e "ver"; deleção
-  envolve decisões (o que fazer com o histórico?) que não bloqueiam o valor.
-- Tokens/custo por execução — métrica útil, mas o limite do briefing é em
-  execuções.
+Plan (carrega o limite mensal de execuções), Client (pertence a um plano), User (quem
+autentica no painel, pertence a um cliente), Agent (pertence a um cliente) e Execution
+(pertence a um agente). Consumo mensal e bloqueio não viraram colunas: são calculados
+a partir das execuções do mês corrente. Explico o porquê na modelagem.
 
-### Riscos e ambiguidades deixados de fora (conscientemente)
+### O que entrou no MVP
 
-- **Fuso horário da virada do mês** — assumo UTC. Se clientes cobrarem "meu mês
-  virou mais cedo/tarde", trocar por timezone do cliente é mudança localizada
-  na query de consumo.
-- **Crescimento da tabela de execuções** — contagem em tempo real com índice
-  atende o MVP; a evolução (contador mensal agregado) está desenhada na
-  Etapa 1 e não muda o contrato da API.
-- **Idempotência do registro de execução** — sem chave de idempotência, um
-  retry do cliente pode contar duas vezes. Aceitável no MVP; anotado.
-- **Rate limiting de infraestrutura** (proteção de abuso) ≠ limite de plano.
-  Só o segundo é regra de negócio; o primeiro fica para produção real.
+Autenticação por token com isolamento por cliente; cadastro, listagem (com consumo) e
+detalhe de agentes; registro de execução com a regra de bloqueio por limite; histórico
+paginado; e o painel React com barra de consumo, cadastro, histórico e indicação
+visual de alerta e bloqueio.
+
+### O que ficou de fora, e por quê
+
+- Visão multi-cliente para o CS: é aditiva, dá para colocar depois sem refazer nada
+  (ver pergunta 1).
+- Notificações por e-mail/Slack: o evento já existe, falta só o listener (pergunta 8).
+- Billing, pro-rata, troca de plano pelo próprio cliente: os planos são dados seedados;
+  gestão comercial não é o problema que o briefing descreve.
+- Edição e exclusão de agentes: o briefing pede "cadastrar" e "ver". Deleção abre
+  discussões (o que fazer com o histórico?) que não bloqueiam o valor da entrega.
+- Custo/tokens por execução: seria útil, mas o limite do briefing é em execuções.
+
+### Riscos que deixei em aberto de propósito
+
+- Fuso horário da virada do mês: assumi UTC. Se algum cliente reclamar que o mês dele
+  "virou mais cedo", a mudança fica concentrada na query de consumo.
+- Crescimento da tabela de execuções: a contagem em tempo real com índice atende o
+  MVP; o desenho da evolução (contador agregado) está na Etapa 1 e não muda a API.
+- Idempotência: sem chave de idempotência, um retry do cliente conta duas vezes.
+  Aceitável por ora, mas anotado.
+- Rate limiting de infraestrutura é outra coisa, diferente do limite de plano. Só o
+  segundo é regra de negócio; o primeiro fica para uma produção de verdade.
 
 ---
 
@@ -173,88 +171,71 @@ erDiagram
 
 ### Decisões de modelagem
 
-**Normalização.** O `monthly_execution_limit` vive apenas em `plans` — única
-fonte de verdade. Nada de copiar o limite para `clients` ou `agents`: se o
-plano muda, o novo limite vale imediatamente (assumption 7 do Discovery).
-O trade-off consciente é não ter histórico de "qual era o limite no mês X";
-se billing retroativo virar requisito, a evolução é uma tabela
-`client_plan_history` — fora do MVP.
+O limite mensal vive só em `plans`. Não copiei o valor para `clients` nem `agents`:
+se o plano muda, o limite novo vale imediatamente (foi o que assumi na pergunta 7).
+O preço disso é não ter histórico de "qual era o limite no mês passado" se billing
+retroativo virar requisito, entra uma tabela de histórico de plano, mas não agora.
 
-**Bloqueio é estado derivado, não coluna.** Não existe `is_blocked` em
-`agents` ou `clients`. Um cliente está bloqueado quando
-`COUNT(execuções do mês corrente) >= limite do plano`. Isso elimina uma
-classe inteira de bugs: ninguém precisa "lembrar de desbloquear" na virada do
-mês, nem existe risco de coluna dessincronizada com a realidade. O custo é
-calcular o consumo a cada leitura/escrita — mitigado pelo índice abaixo.
+Bloqueio não é coluna. Não existe `is_blocked` em lugar nenhum: um cliente está
+bloqueado quando a contagem de execuções do mês corrente alcança o limite do plano.
+Fiz assim porque coluna de estado derivado é bug esperando para acontecer alguém
+precisa lembrar de desbloquear todo dia 1º, e qualquer falha nesse processo deixa o
+dado mentindo. Calculando, a virada do mês se resolve sozinha. O custo é contar a
+cada consulta, o que o índice abaixo resolve bem no volume de um MVP.
 
-**Índices relevantes.**
-- `executions (agent_id, created_at)` — índice composto que atende os dois
-  acessos quentes: histórico paginado por agente (ordenado por data) e
-  contagem mensal (range scan por período). É o índice mais importante do
-  sistema.
-- FKs indexadas: `clients.plan_id`, `users.client_id`, `agents.client_id`.
-- `users.email` unique (login).
+Índices: o mais importante é o composto `executions (agent_id, created_at)`, que
+serve os dois acessos quentes o histórico paginado por agente e a contagem do mês.
+Também indexei as FKs (`clients.plan_id`, `users.client_id`, `agents.client_id`),
+porque o Postgres, diferente do MySQL, não faz isso sozinho. E `users.email` é unique.
 
-**"Uso mensal" performático: contagem em tempo real vs. agregação.**
-- **MVP (implementado): contagem em tempo real.** O consumo do cliente é um
-  `COUNT` sobre `executions` juntando os agentes do cliente, filtrado pelo mês
-  corrente, servido pelo índice composto. Para o volume de um MVP (milhares a
-  centenas de milhares de execuções/mês por cliente), isso responde em
-  milissegundos, é sempre exato e não tem estado para dessincronizar.
-- **Evolução (documentada, não implementada): contador agregado.** Em escala
-  (milhões de execuções/mês), a contagem no caminho crítico da escrita vira
-  gargalo. O desenho: tabela `monthly_usages (client_id, period, count)` com
-  `UNIQUE (client_id, period)` e incremento atômico
-  (`UPDATE ... SET count = count + 1`) na mesma transação do INSERT da
-  execução. A leitura vira O(1). O contrato da API não muda — só a
-  implementação interna do cálculo de consumo.
+Sobre como calcular o "uso mensal" de forma performática: implementei a contagem em
+tempo real (um COUNT servido pelo índice composto), que é exata, não tem estado para
+dessincronizar e responde em milissegundos no volume esperado de um MVP. Se a escala
+chegar a milhões de execuções por mês, esse COUNT no caminho da escrita vira gargalo;
+o plano B, que deixei desenhado mas não implementei, é uma tabela
+`monthly_usages (client_id, period, count)` com incremento atômico na mesma transação
+do INSERT. A leitura vira O(1) e o contrato da API não muda.
 
-**Concorrência (regra central).** Duas execuções simultâneas quando resta 1
-unidade do limite podem ambas ler "ainda cabe" e ambas gravar — estourando o
-limite. A verificação e o INSERT acontecem dentro de uma transação com lock
-(`SELECT ... FOR UPDATE` na linha do cliente), serializando execuções
-concorrentes do mesmo cliente. Detalhes na Etapa 2.
+Concorrência: duas execuções simultâneas quando resta uma vaga no limite poderiam
+ambas ler "ainda cabe" e ambas gravar. Resolvi com transação e `SELECT ... FOR UPDATE`
+na linha do cliente, o que serializa o par verificação + INSERT para execuções do
+mesmo cliente sem travar clientes diferentes entre si.
 
-**Enums como string + PHP Enum.** `status` é `string` no banco, validada por
-Enums do PHP (`AgentStatus`, `ExecutionStatus`) na aplicação. Evito o tipo
-`ENUM` nativo do Postgres porque alterar valores dele exige DDL chato em
-produção; a validação na borda da aplicação (FormRequest + cast do Eloquent)
-dá a mesma garantia com flexibilidade.
+Os status são `string` no banco com Enum do PHP na aplicação. Evitei o tipo ENUM
+nativo do Postgres porque alterar valores dele em produção é um DDL chato; validar na
+borda (FormRequest + cast do Eloquent) dá a mesma garantia com menos atrito.
 
 ---
 
 ## Decisões de arquitetura
 
-**Backend (Laravel 13 + Sanctum + Postgres)**
-- **API versionada** (`/api/v1`) com **Form Requests** (validação), **API Resources**
-  (serialização), **Policies** (autorização client-scoped), **Actions**
-  (`RegisterExecutionAction` isola a regra central e é testável sem HTTP),
-  **Enums** PHP espelhando os status, **Event/Listener** no bloqueio
-  (`ExecutionLimitReached` → log estruturado; plugar e-mail/Slack = adicionar listener).
-- **Auth:** Sanctum com Bearer token. Session cookies exigiriam domínios casados
-  (front na Vercel, API no Railway); JWT adicionaria dependência sem ganho.
-- **Bloqueio (regra central):** transação com `lockForUpdate()` na linha do
-  **cliente** — serializa o check-do-limite + INSERT de execuções concorrentes do
-  mesmo cliente, sem travar clientes distintos entre si. Tentativa rejeitada é
-  **registrada** com status `blocked` (demanda reprimida = dado de upsell) e a
-  resposta é **429** com corpo no mesmo shape dos erros de validação.
-- **Erros consistentes:** `{message, errors}` em toda a API; `shouldRenderJsonWhen`
-  garante JSON para `api/*` mesmo sem header `Accept`; `APP_DEBUG=false` em produção.
+No backend usei os blocos que costumo usar em API Laravel: rotas versionadas em
+`/api/v1`, Form Requests para validação, API Resources para serialização, Policies
+para autorização (é a Policy que garante que um cliente não vê dados do outro) e
+Actions para regra de negócio a `RegisterExecutionAction` concentra a regra central
+do desafio e dá para testá-la sem passar pelo HTTP. O bloqueio dispara um evento com
+um listener que escreve log estruturado; a tentativa rejeitada volta como 429 com o
+mesmo formato `{message, errors}` dos erros de validação, então o frontend trata tudo
+igual.
 
-**Frontend (React 19 + Vite + TypeScript + Tailwind v4)**
-- **Estado:** sessão em Context (único estado global real); dados de servidor no
-  cache do **TanStack Query** (retry, invalidação, `keepPreviousData` na paginação);
-  formulários com `useState` local. Sem Redux — não há demanda que o justifique.
-- **Performance:** `React.memo` nos cards, `staleTime` 30s (evita refetch em
-  cascata), paginação server-side, `keepPreviousData` (sem flash de skeleton).
-- **A11y:** labels vinculados, `role="alert"`, `aria-invalid`/`aria-describedby`
-  nos erros de campo, `role="progressbar"` na barra de consumo, navegação por teclado.
-- **Estados de UI:** skeleton, vazio, erro com retry — todos visitáveis com os
-  logins demo.
+Autenticação ficou com o Sanctum emitindo Bearer token. Cheguei a considerar session
+cookies (o modo SPA do Sanctum), mas isso exige front e API no mesmo domínio, e aqui
+o deploy é Vercel + Railway. JWT puro seria mais uma dependência para resolver um
+problema que o Sanctum já resolve.
+
+No frontend, o único estado global de verdade é a sessão, que ficou num Context. Os
+dados de servidor (agentes, execuções, consumo) vivem no cache do TanStack Query, que
+já me dá retry, invalidação e o `keepPreviousData` na paginação de graça. Formulário
+é `useState` local mesmo. Não usei Redux porque não sobrou nada para ele fazer.
+Sobre performance: `React.memo` nos cards da listagem, `staleTime` de 30s para não
+refazer fetch a cada navegação, e paginação no servidor. Acessibilidade básica está
+espalhada pelos componentes: labels ligados aos inputs, `role="alert"` nas mensagens
+de erro, `aria-invalid` e `aria-describedby` nos campos, `role="progressbar"` na
+barra de consumo.
 
 ## Como rodar localmente
 
-Pré-requisitos: Docker (para o Sail) e Node 22+.
+Precisa de Docker (para o Sail) e Node 22+.
 
 ```bash
 # Backend
@@ -266,89 +247,98 @@ docker run --rm -v "$(pwd)":/var/www/html -w /var/www/html \
 ./vendor/bin/sail artisan migrate --seed
 # API em http://localhost — doc em http://localhost/docs/api
 
-# Frontend (outro terminal)
+# Frontend (em outro terminal)
 cd frontend
 npm install
 cp .env.example .env            # VITE_API_URL=http://localhost/api/v1
 npm run dev
 # Painel em http://localhost:5173
+```
 
-# Testes e lint
+Testes e lint:
+
+```bash
 ./vendor/bin/sail artisan test --compact
 ./vendor/bin/sail bin pint --dirty
 cd frontend && npm run lint && npm run build
 ```
 
-## Evidências de debug (Etapa 5)
+## Bugs que encontrei pelo caminho (Etapa 5)
 
-**1. O rollback que engolia a tentativa bloqueada.** Na primeira versão da
-`RegisterExecutionAction`, a exception de limite era lançada **dentro** do
-`DB::transaction()`. Sintoma: a API respondia 429 corretamente, mas o teste
-`registra a tentativa bloqueada` falhava no `assertDatabaseHas` — o registro
-`blocked` sumia. Causa: o throw dentro do closure faz o Laravel dar rollback em
-tudo, inclusive no INSERT da tentativa. Correção: o closure apenas *retorna* o
-resultado; commit acontece; evento e exception disparam **depois**. O teste de
-regressão cobre exatamente esse cenário.
+**O rollback que engolia a tentativa bloqueada.** Na primeira versão da
+`RegisterExecutionAction`, eu lançava a exception de limite dentro do
+`DB::transaction()`. A API respondia 429 certinho, mas o teste que verificava se a
+tentativa bloqueada ficou gravada falhava: o registro sumia do banco. Demorei um
+pouco para ver que o throw dentro do closure faz o Laravel dar rollback em tudo,
+inclusive no INSERT da tentativa que eu tinha acabado de fazer. A correção foi o
+closure só retornar o resultado, deixar a transação commitar, e disparar o evento e a
+exception depois. O teste que me pegou virou o teste de regressão disso.
 
-**2. `Route [login] not defined` (500) só no navegador.** Acessando uma rota
-protegida sem token pelo navegador, o middleware `Authenticate` tentava
-redirecionar para uma página de login que não existe numa API pura. Os testes
-não pegavam porque `getJson()` envia `Accept: application/json`. Correção:
-`redirectGuestsTo(null)` para `api/*` + teste de regressão usando `get()` sem
-header, simulando o navegador.
+**`Route [login] not defined` só no navegador.** Acessando uma rota protegida sem
+token pelo navegador, tomava um 500 com essa mensagem. Nos testes nunca aparecia,
+porque `getJson()` manda `Accept: application/json`. Sem esse header, o middleware de
+autenticação tenta redirecionar o visitante para uma página de login que não existe
+numa API pura. Corrigi com `redirectGuestsTo` devolvendo `null` para `api/*` e
+escrevi um teste usando `get()` sem header, do jeito que o navegador faz.
 
-**3. Mixed content atrás do proxy (deploy).** Em produção, a doc OpenAPI e os
-links de paginação saíam com `http://` — o TLS termina no proxy do Railway e o
-Laravel via a requisição como HTTP, e o navegador bloqueava as chamadas
-(mixed content). Diagnóstico via headers da requisição no DevTools; correção:
-`trustProxies(at: '*')` + `APP_URL` com esquema correto.
+**Mixed content atrás do proxy, já no deploy.** Em produção, a doc OpenAPI e os links
+de paginação saíam com `http://` e o navegador bloqueava as chamadas. O TLS termina
+no proxy do Railway, então o Laravel enxergava a requisição como HTTP. Descobri
+olhando os headers no DevTools; a correção foi confiar no proxy
+(`trustProxies(at: '*')`) e conferir o esquema no `APP_URL`.
 
-## Monitoramento em produção (descritivo)
+## Como eu monitoraria isso em produção
 
-- **Saúde:** uptime do `/up` (health check), taxa de 5xx, latência p50/p95 por
-  endpoint — em especial `POST /executions`, que carrega a transação com lock.
-- **Negócio:** eventos de bloqueio por cliente/dia (pico = oportunidade comercial
-  ou plano mal dimensionado); % de clientes acima de 80% do limite; execuções/min.
-- **Banco:** conexões ativas, tempo de espera em locks (contenção do
-  `lockForUpdate` indica hora de migrar para o contador agregado da Etapa 1),
-  crescimento da tabela `executions`.
-- **Ferramentas:** Sentry para exceptions, APM (New Relic/Datadog) ou
-  Prometheus+Grafana para métricas, logs estruturados (já emitidos em stderr)
-  agregados. Alertas: pico de 429 de limite, 5xx > 1%, latência p95 > 500ms.
+Não implementei, mas acompanharia:
+
+- Saúde da aplicação: uptime do endpoint `/up`, taxa de 5xx e latência p95 por
+  endpoint. O `POST /executions` merece atenção especial por causa da transação com
+  lock.
+- Métricas de negócio: bloqueios por cliente por dia (um pico ali é ou oportunidade
+  de upgrade ou plano mal dimensionado), percentual de clientes acima de 80% do
+  limite e execuções por minuto.
+- Banco: conexões ativas, tempo de espera em locks (se a contenção do
+  `lockForUpdate` crescer, é o sinal de migrar para o contador agregado descrito na
+  Etapa 1) e crescimento da tabela de execuções.
+
+Ferramental: Sentry para exceptions, um APM ou Prometheus/Grafana para métricas, e os
+logs estruturados que a aplicação já emite em stderr agregados em algum lugar
+pesquisável. Alertas para pico de 429 de limite, 5xx acima de 1% e latência fora do
+normal.
 
 ## Mentalidade de produto (Etapa 7)
 
-**1. Gera valor real? Para quem?** Sim, para três públicos: **CS** diagnostica
-"por que o agente parou" em segundos (era o atrito central do briefing);
-**Comercial** ganha a lista de contas em risco e a *demanda reprimida* (tentativas
-bloqueadas) como gatilho de upsell; **Produto** enxerga uso real por cliente. O
-cliente final ganha indiretamente: bloqueio previsível e comunicado em vez de
-falha silenciosa.
+**1. Isso gera valor real? Para quem?** Gera, e para mais de um time. O CS passa a
+responder "por que o agente parou" em segundos, que era o atrito central do briefing.
+O comercial ganha a lista de contas em risco e, de quebra, as tentativas bloqueadas
+saber que um cliente tentou executar 500 vezes depois de bloqueado é meio caminho para
+vender upgrade. Produto ganha visibilidade de uso real. O cliente final ganha
+indiretamente: bloqueio previsível e explicável em vez de falha silenciosa.
 
-**2. Solução mais simples?** Sim: um job diário que agrega execuções por cliente
-e publica num canal do Slack (ou planilha) a lista de clientes ≥80% do limite,
-mais o enforcement do limite na API. Sem painel, sem frontend — resolveria
-"saber quem está em risco" e "parar de responder" com ~1 dia de trabalho. O
-painel se justifica quando o CS precisa de autoatendimento e histórico.
+**2. Existiria solução mais simples?** Existiria. O enforcement do limite na API mais
+um job diário que posta num canal do Slack a lista de clientes acima de 80% resolveria
+o problema central do briefing em um dia de trabalho, sem painel nenhum. O painel se
+justifica quando o CS precisa se servir sozinho e olhar histórico que é o cenário
+descrito, mas vale registrar que a versão planilha-com-alerta atacaria a mesma dor.
 
-**3. Vale investir agora?** O **enforcement + alerta** vale imediatamente: sem
-ele a Rotik paga custo de inferência acima do contratado (margem vazando) e
-descobre estouros pelo suporte. O **painel completo** é segunda prioridade —
-compete com confiabilidade dos próprios agentes. Investiria: enforcement já
-(feito), painel em versão mínima (feito), e evoluções (notificações, visão CS
-multi-cliente) puxadas por demanda do time.
+**3. Vale investir nisso agora?** Na parte de enforcement e alerta, sim, e com
+urgência: sem limite aplicado, a Rotik banca custo de inferência acima do contratado e
+só descobre estouros quando vira ticket. O painel completo eu colocaria como segunda
+prioridade, competindo com a confiabilidade dos próprios agentes. Na prática foi essa
+ordem que segui aqui: a regra de bloqueio é a parte mais cuidada do projeto, e o
+painel é uma versão mínima honesta.
 
-**4. Como medir sucesso?**
-- **Tempo de diagnóstico do CS**: tempo médio para responder tickets de
-  "agente parou/uso" antes vs. depois (meta: cair >50%).
-- **Estouros sem aviso**: % de clientes que atingem 100% sem contato prévio do
-  comercial (meta: tender a zero — o alerta de 80% deve gerar ação antes).
-- **Adoção**: usuários ativos semanais do painel dentro do time de CS/Comercial
-  (se ninguém abre, a planilha era suficiente).
+**4. Como medir se deu certo?** Três métricas: tempo médio do CS para resolver
+tickets de "agente parou / uso" antes e depois (esperaria cair pela metade);
+percentual de clientes que chegam a 100% do limite sem nenhum contato prévio do
+comercial (o alerta de 80% deveria puxar esse número para perto de zero); e usuários
+ativos semanais do painel dentro do time se ninguém abre, a planilha bastava.
 
-## Simplificações conscientes
+## Simplificações que fiz de propósito
 
-- `php artisan serve` no Railway (produção real: FrankenPHP/Octane ou nginx+fpm).
-- Token em `localStorage` (produção real: cookie httpOnly via modo SPA do Sanctum).
-- CORS liberado para `*` e doc OpenAPI pública (vitrine do desafio).
-- Sem chave de idempotência no registro de execuções (retry pode duplicar).
+- `php artisan serve` no Railway. Numa produção de verdade seria FrankenPHP/Octane ou
+  nginx com php-fpm; para a demo, é o que sobe igual em qualquer builder.
+- Token no `localStorage`. O caminho mais robusto contra XSS é cookie httpOnly com o
+  modo SPA do Sanctum, mas exigiria domínios casados entre front e API.
+- CORS aberto e documentação da API pública, para facilitar a avaliação.
+- Registro de execução sem chave de idempotência: um retry conta duas vezes.
