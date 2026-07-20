@@ -333,12 +333,3 @@ tickets de "agente parou / uso" antes e depois (esperaria cair pela metade);
 percentual de clientes que chegam a 100% do limite sem nenhum contato prévio do
 comercial (o alerta de 80% deveria puxar esse número para perto de zero); e usuários
 ativos semanais do painel dentro do time se ninguém abre, a planilha bastava.
-
-## Simplificações que fiz de propósito
-
-- `php artisan serve` no Railway. Numa produção de verdade seria FrankenPHP/Octane ou
-  nginx com php-fpm; para a demo, é o que sobe igual em qualquer builder.
-- Token no `localStorage`. O caminho mais robusto contra XSS é cookie httpOnly com o
-  modo SPA do Sanctum, mas exigiria domínios casados entre front e API.
-- CORS aberto e documentação da API pública, para facilitar a avaliação.
-- Registro de execução sem chave de idempotência: um retry conta duas vezes.
